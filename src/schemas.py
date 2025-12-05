@@ -1,7 +1,6 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
-# Movie Schemas
 class MovieBase(BaseModel):
     title: str
     genres: str
@@ -14,7 +13,6 @@ class Movie(MovieBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# Link Schemas
 class LinkBase(BaseModel):
     imdbId: str
     tmdbId: str
@@ -27,7 +25,6 @@ class Link(LinkBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# Rating Schemas
 class RatingBase(BaseModel):
     userId: int
     movieId: int
@@ -42,7 +39,6 @@ class Rating(RatingBase):
 
     model_config = ConfigDict(from_attributes=True)
 
-# Tag Schemas
 class TagBase(BaseModel):
     userId: int
     movieId: int
@@ -56,3 +52,27 @@ class Tag(TagBase):
     id: int
 
     model_config = ConfigDict(from_attributes=True)
+
+class UserBase(BaseModel):
+    username: str
+
+class UserCreate(UserBase):
+    password: str
+
+class UserResponse(UserBase):
+    id: int
+    roles: list[str]
+
+    model_config = ConfigDict(from_attributes=True)
+
+class LoginData(BaseModel):
+    username: str
+    password: str
+
+class Token(BaseModel):
+    access_token: str
+    token_type: str
+
+class UserDetails(BaseModel):
+    username: str
+    roles: list[str]

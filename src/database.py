@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float
+from sqlalchemy import create_engine, Column, Integer, String, Float, JSON
 from sqlalchemy.orm import sessionmaker, declarative_base
 import os
 
@@ -43,6 +43,14 @@ class Tag(Base):
     movieId = Column(Integer, index=True)
     tag = Column(String)
     timestamp = Column(Integer)
+
+class User(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, index=True, autoincrement=True)
+    username = Column(String, unique=True, index=True)
+    hashed_password = Column(String)
+    roles = Column(JSON, default=["ROLE_USER"])
 
 def get_db():
     db = SessionLocal()

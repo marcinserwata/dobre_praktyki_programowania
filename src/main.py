@@ -2,14 +2,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from typing import List
+from datetime import timedelta
 import database
 import schemas
+import auth
 import csv
 import os
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup logic
     database.Base.metadata.create_all(bind=database.engine)
     db = database.SessionLocal()
     try:
@@ -50,6 +51,16 @@ async def lifespan(app: FastAPI):
                     for row in reader:
                         db.add(database.Tag(userId=int(row['userId']), movieId=int(row['movieId']), tag=row['tag'], timestamp=int(row['timestamp'])))
                 db.commit()
+        
+        if db.query(database.User).filter(database.User.username == "admin").first() is None:
+            print("Creating default admin user...")
+            admin_user = database.User(
+                username="admin",
+                hashed_password=auth.hash_password("admin123"),
+                roles=["ROLE_ADMIN", "ROLE_USER"]
+            )
+            db.add(admin_user)
+            db.commit()
             
         print("Database initialized.")
     finally:
@@ -63,12 +74,63 @@ app = FastAPI(lifespan=lifespan)
 def read_root():
     return {"hello": "world"}
 
+@app.post("/login", response_model=schemas.Token)
+def login(data: schemas.LoginData, db: Session = Depends(database.get_db)):
+    user = db.query(database.User).filter(database.User.username == data.username).first()
+    
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    if not auth.verify_password(data.password, user.hashed_password):
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    
+    access_token = auth.create_access_token(
+        data={"sub": user.username, "roles": user.roles},
+        expires_delta=timedelta(hours=1)
+    )
+    return {"access_token": access_token, "token_type": "bearer"}
+
+
+@app.post("/users", response_model=schemas.UserResponse, status_code=status.HTTP_201_CREATED)
+def create_user(
+    user: schemas.UserCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.require_admin)
+):
+    existing_user = db.query(database.User).filter(database.User.username == user.username).first()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="Username already exists")
+    
+    new_user = database.User(
+        username=user.username,
+        hashed_password=auth.hash_password(user.password),
+        roles=["ROLE_USER"]
+    )
+    db.add(new_user)
+    db.commit()
+    db.refresh(new_user)
+    return new_user
+
+
+@app.get("/user_details", response_model=schemas.UserDetails)
+def get_user_details(current_user: database.User = Depends(auth.get_current_user)):
+    return schemas.UserDetails(username=current_user.username, roles=current_user.roles)
+
 @app.get("/movies", response_model=List[schemas.Movie])
-def get_movies(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+def get_movies(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     return db.query(database.Movie).offset(skip).limit(limit).all()
 
 @app.post("/movies", response_model=schemas.Movie, status_code=status.HTTP_201_CREATED)
-def create_movie(movie: schemas.MovieCreate, db: Session = Depends(database.get_db)):
+def create_movie(
+    movie: schemas.MovieCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_movie = db.query(database.Movie).filter(database.Movie.movieId == movie.movieId).first()
     if db_movie:
         raise HTTPException(status_code=400, detail="Movie already exists")
@@ -79,14 +141,23 @@ def create_movie(movie: schemas.MovieCreate, db: Session = Depends(database.get_
     return new_movie
 
 @app.get("/movies/{movie_id}", response_model=schemas.Movie)
-def get_movie(movie_id: int, db: Session = Depends(database.get_db)):
+def get_movie(
+    movie_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_movie = db.query(database.Movie).filter(database.Movie.movieId == movie_id).first()
     if db_movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
     return db_movie
 
 @app.put("/movies/{movie_id}", response_model=schemas.Movie)
-def update_movie(movie_id: int, movie: schemas.MovieCreate, db: Session = Depends(database.get_db)):
+def update_movie(
+    movie_id: int, 
+    movie: schemas.MovieCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_movie = db.query(database.Movie).filter(database.Movie.movieId == movie_id).first()
     if db_movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
@@ -99,7 +170,11 @@ def update_movie(movie_id: int, movie: schemas.MovieCreate, db: Session = Depend
     return db_movie
 
 @app.delete("/movies/{movie_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_movie(movie_id: int, db: Session = Depends(database.get_db)):
+def delete_movie(
+    movie_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_movie = db.query(database.Movie).filter(database.Movie.movieId == movie_id).first()
     if db_movie is None:
         raise HTTPException(status_code=404, detail="Movie not found")
@@ -108,11 +183,20 @@ def delete_movie(movie_id: int, db: Session = Depends(database.get_db)):
     return None
 
 @app.get("/links", response_model=List[schemas.Link])
-def get_links(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+def get_links(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     return db.query(database.Link).offset(skip).limit(limit).all()
 
 @app.post("/links", response_model=schemas.Link, status_code=status.HTTP_201_CREATED)
-def create_link(link: schemas.LinkCreate, db: Session = Depends(database.get_db)):
+def create_link(
+    link: schemas.LinkCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_link = db.query(database.Link).filter(database.Link.movieId == link.movieId).first()
     if db_link:
         raise HTTPException(status_code=400, detail="Link already exists")
@@ -123,14 +207,23 @@ def create_link(link: schemas.LinkCreate, db: Session = Depends(database.get_db)
     return new_link
 
 @app.get("/links/{movie_id}", response_model=schemas.Link)
-def get_link(movie_id: int, db: Session = Depends(database.get_db)):
+def get_link(
+    movie_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_link = db.query(database.Link).filter(database.Link.movieId == movie_id).first()
     if db_link is None:
         raise HTTPException(status_code=404, detail="Link not found")
     return db_link
 
 @app.put("/links/{movie_id}", response_model=schemas.Link)
-def update_link(movie_id: int, link: schemas.LinkCreate, db: Session = Depends(database.get_db)):
+def update_link(
+    movie_id: int, 
+    link: schemas.LinkCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_link = db.query(database.Link).filter(database.Link.movieId == movie_id).first()
     if db_link is None:
         raise HTTPException(status_code=404, detail="Link not found")
@@ -143,7 +236,11 @@ def update_link(movie_id: int, link: schemas.LinkCreate, db: Session = Depends(d
     return db_link
 
 @app.delete("/links/{movie_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_link(movie_id: int, db: Session = Depends(database.get_db)):
+def delete_link(
+    movie_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_link = db.query(database.Link).filter(database.Link.movieId == movie_id).first()
     if db_link is None:
         raise HTTPException(status_code=404, detail="Link not found")
@@ -152,11 +249,20 @@ def delete_link(movie_id: int, db: Session = Depends(database.get_db)):
     return None
 
 @app.get("/ratings", response_model=List[schemas.Rating])
-def get_ratings(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+def get_ratings(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     return db.query(database.Rating).offset(skip).limit(limit).all()
 
 @app.post("/ratings", response_model=schemas.Rating, status_code=status.HTTP_201_CREATED)
-def create_rating(rating: schemas.RatingCreate, db: Session = Depends(database.get_db)):
+def create_rating(
+    rating: schemas.RatingCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     new_rating = database.Rating(**rating.model_dump())
     db.add(new_rating)
     db.commit()
@@ -164,14 +270,23 @@ def create_rating(rating: schemas.RatingCreate, db: Session = Depends(database.g
     return new_rating
 
 @app.get("/ratings/{rating_id}", response_model=schemas.Rating)
-def get_rating(rating_id: int, db: Session = Depends(database.get_db)):
+def get_rating(
+    rating_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_rating = db.query(database.Rating).filter(database.Rating.id == rating_id).first()
     if db_rating is None:
         raise HTTPException(status_code=404, detail="Rating not found")
     return db_rating
 
 @app.put("/ratings/{rating_id}", response_model=schemas.Rating)
-def update_rating(rating_id: int, rating: schemas.RatingCreate, db: Session = Depends(database.get_db)):
+def update_rating(
+    rating_id: int, 
+    rating: schemas.RatingCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_rating = db.query(database.Rating).filter(database.Rating.id == rating_id).first()
     if db_rating is None:
         raise HTTPException(status_code=404, detail="Rating not found")
@@ -184,7 +299,11 @@ def update_rating(rating_id: int, rating: schemas.RatingCreate, db: Session = De
     return db_rating
 
 @app.delete("/ratings/{rating_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_rating(rating_id: int, db: Session = Depends(database.get_db)):
+def delete_rating(
+    rating_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_rating = db.query(database.Rating).filter(database.Rating.id == rating_id).first()
     if db_rating is None:
         raise HTTPException(status_code=404, detail="Rating not found")
@@ -193,11 +312,20 @@ def delete_rating(rating_id: int, db: Session = Depends(database.get_db)):
     return None
 
 @app.get("/tags", response_model=List[schemas.Tag])
-def get_tags(skip: int = 0, limit: int = 100, db: Session = Depends(database.get_db)):
+def get_tags(
+    skip: int = 0, 
+    limit: int = 100, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     return db.query(database.Tag).offset(skip).limit(limit).all()
 
 @app.post("/tags", response_model=schemas.Tag, status_code=status.HTTP_201_CREATED)
-def create_tag(tag: schemas.TagCreate, db: Session = Depends(database.get_db)):
+def create_tag(
+    tag: schemas.TagCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     new_tag = database.Tag(**tag.model_dump())
     db.add(new_tag)
     db.commit()
@@ -205,14 +333,23 @@ def create_tag(tag: schemas.TagCreate, db: Session = Depends(database.get_db)):
     return new_tag
 
 @app.get("/tags/{tag_id}", response_model=schemas.Tag)
-def get_tag(tag_id: int, db: Session = Depends(database.get_db)):
+def get_tag(
+    tag_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_tag = db.query(database.Tag).filter(database.Tag.id == tag_id).first()
     if db_tag is None:
         raise HTTPException(status_code=404, detail="Tag not found")
     return db_tag
 
 @app.put("/tags/{tag_id}", response_model=schemas.Tag)
-def update_tag(tag_id: int, tag: schemas.TagCreate, db: Session = Depends(database.get_db)):
+def update_tag(
+    tag_id: int, 
+    tag: schemas.TagCreate, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_tag = db.query(database.Tag).filter(database.Tag.id == tag_id).first()
     if db_tag is None:
         raise HTTPException(status_code=404, detail="Tag not found")
@@ -225,7 +362,11 @@ def update_tag(tag_id: int, tag: schemas.TagCreate, db: Session = Depends(databa
     return db_tag
 
 @app.delete("/tags/{tag_id}", status_code=status.HTTP_204_NO_CONTENT)
-def delete_tag(tag_id: int, db: Session = Depends(database.get_db)):
+def delete_tag(
+    tag_id: int, 
+    db: Session = Depends(database.get_db),
+    current_user: database.User = Depends(auth.get_current_user)
+):
     db_tag = db.query(database.Tag).filter(database.Tag.id == tag_id).first()
     if db_tag is None:
         raise HTTPException(status_code=404, detail="Tag not found")
