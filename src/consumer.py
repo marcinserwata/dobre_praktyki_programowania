@@ -1,67 +1,101 @@
-import csv
+import sqlite3
 import os
 import time
 import argparse
 from datetime import datetime
-from filelock import FileLock
 
-QUEUE_FILE = os.path.join(os.path.dirname(__file__), "queue.csv")
-LOCK_FILE = QUEUE_FILE + ".lock"
+DB_FILE = os.path.join(os.path.dirname(__file__), "queue.db")
 TASK_EXECUTION_TIME = 30
 CHECK_INTERVAL = 5
 
 
+def get_connection():
+    conn = sqlite3.connect(DB_FILE, timeout=30)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_table_exists():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            task_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+
 def read_all_tasks() -> list[dict]:
-    if not os.path.exists(QUEUE_FILE):
-        return []
+    ensure_table_exists()
     
-    with open(QUEUE_FILE, mode="r", encoding="utf-8") as file:
-        reader = csv.DictReader(file)
-        return list(reader)
-
-
-def write_all_tasks(tasks: list[dict]):
-    if not tasks:
-        return
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT * FROM tasks")
+    rows = cursor.fetchall()
+    conn.close()
     
-    fieldnames = ["id", "task_name", "status", "created_at", "updated_at"]
-    
-    with open(QUEUE_FILE, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.DictWriter(file, fieldnames=fieldnames)
-        writer.writeheader()
-        writer.writerows(tasks)
+    return [dict(row) for row in rows]
 
 
 def update_task_status(task_id: str, new_status: str) -> bool:
-    lock = FileLock(LOCK_FILE)
+    conn = get_connection()
+    cursor = conn.cursor()
     
-    with lock:
-        tasks = read_all_tasks()
-        
-        for task in tasks:
-            if task["id"] == task_id:
-                task["status"] = new_status
-                task["updated_at"] = datetime.now().isoformat()
-                write_all_tasks(tasks)
-                return True
+    now = datetime.now().isoformat()
+    cursor.execute(
+        "UPDATE tasks SET status = ?, updated_at = ? WHERE id = ?",
+        (new_status, now, task_id)
+    )
     
-    return False
+    updated = cursor.rowcount > 0
+    conn.commit()
+    conn.close()
+    
+    return updated
 
 
 def get_pending_task() -> dict | None:
-    lock = FileLock(LOCK_FILE)
+    ensure_table_exists()
     
-    with lock:
-        tasks = read_all_tasks()
+    conn = get_connection()
+    conn.isolation_level = 'IMMEDIATE'
+    cursor = conn.cursor()
+    
+    try:
+        cursor.execute(
+            "SELECT * FROM tasks WHERE status = 'pending' ORDER BY created_at LIMIT 1"
+        )
+        row = cursor.fetchone()
         
-        for task in tasks:
-            if task["status"] == "pending":
-                task["status"] = "in_progress"
-                task["updated_at"] = datetime.now().isoformat()
-                write_all_tasks(tasks)
-                return task
-    
-    return None
+        if row:
+            task = dict(row)
+            now = datetime.now().isoformat()
+            
+            cursor.execute(
+                "UPDATE tasks SET status = 'in_progress', updated_at = ? WHERE id = ?",
+                (now, task['id'])
+            )
+            task['status'] = 'in_progress'
+            task['updated_at'] = now
+            
+            conn.commit()
+            conn.close()
+            return task
+        
+        conn.close()
+        return None
+        
+    except sqlite3.Error as e:
+        conn.rollback()
+        conn.close()
+        print(f"[ERROR] Błąd bazy danych: {e}")
+        return None
 
 
 def execute_task(task: dict, consumer_id: str):

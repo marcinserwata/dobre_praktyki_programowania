@@ -1,21 +1,36 @@
-import csv
+import sqlite3
 import os
 import uuid
 import argparse
 from datetime import datetime
 
-QUEUE_FILE = os.path.join(os.path.dirname(__file__), "queue.csv")
+DB_FILE = os.path.join(os.path.dirname(__file__), "queue.db")
 
 
-def ensure_queue_file_exists():
-    if not os.path.exists(QUEUE_FILE):
-        with open(QUEUE_FILE, mode="w", newline="", encoding="utf-8") as file:
-            writer = csv.writer(file)
-            writer.writerow(["id", "task_name", "status", "created_at", "updated_at"])
+def get_connection():
+    conn = sqlite3.connect(DB_FILE)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+def ensure_table_exists():
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS tasks (
+            id TEXT PRIMARY KEY,
+            task_name TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending',
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        )
+    """)
+    conn.commit()
+    conn.close()
 
 
 def add_task_to_queue(task_name: str = None):
-    ensure_queue_file_exists()
+    ensure_table_exists()
     
     task_id = str(uuid.uuid4())[:8]
     if task_name is None:
@@ -23,9 +38,14 @@ def add_task_to_queue(task_name: str = None):
     
     now = datetime.now().isoformat()
     
-    with open(QUEUE_FILE, mode="a", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow([task_id, task_name, "pending", now, now])
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO tasks (id, task_name, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
+        (task_id, task_name, "pending", now, now)
+    )
+    conn.commit()
+    conn.close()
     
     print(f"[PRODUCER] Dodano zadanie: {task_name} (ID: {task_id})")
     return task_id
