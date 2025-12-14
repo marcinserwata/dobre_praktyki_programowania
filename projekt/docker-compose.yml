@@ -1,0 +1,54 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: rabbitmq
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    environment:
+      - RABBITMQ_DEFAULT_USER=guest
+      - RABBITMQ_DEFAULT_PASS=guest
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_port_connectivity"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  serwis_a:
+    build:
+      context: ./serwis_a
+      dockerfile: Dockerfile
+    container_name: serwis_a
+    ports:
+      - "5000:5000"
+    depends_on:
+      - rabbitmq
+
+  serwis_b:
+    build:
+      context: ./serwis_b
+      dockerfile: Dockerfile
+    container_name: serwis_b
+    ports:
+      - "5001:5001"
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+
+  consumer:
+    build:
+      context: ./serwis_b
+      dockerfile: Dockerfile.consumer
+    environment:
+      - RABBITMQ_HOST=rabbitmq
+      - SERWIS_A_URL=http://serwis_a:5000
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      serwis_a:
+        condition: service_started
+    deploy:
+      replicas: 2
+    restart: on-failure
