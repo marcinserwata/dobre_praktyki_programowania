@@ -32,7 +32,7 @@ consumer:
 
 ```powershell
 # Wysłanie obrazu do analizy
-Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8e/Pedestrians_in_a_crosswalk%2C_New_York_City.jpg/800px-Pedestrians_in_a_crosswalk%2C_New_York_City.jpg"}'
+Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://independentaustralia.net/_lib/slir/w800-c660x434/i/article/img/article-19811-hero.jpg?t=1749265169"}'
 
 # Sprawdzenie wyników
 Invoke-RestMethod -Uri "http://localhost:5000/results"
@@ -48,24 +48,18 @@ Invoke-RestMethod -Uri "http://localhost:5000/results"
 4. Poczekaj ~30 sekund na pobranie modelu YOLO przez konsumerów
 5. Wyślij obrazek do analizy:
    ```powershell
-   Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://images.unsplash.com/photo-1529156069898-49953e39b3ac?w=640"}'
+   Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://independentaustralia.net/_lib/slir/w800-c660x434/i/article/img/article-19811-hero.jpg?t=1749265169"}'
    ```
 6. Poczekaj ~10 sekund i sprawdź wyniki:
    ```powershell
    # Pobierz wszystkie wyniki
-   Invoke-RestMethod http://localhost:5000/results
-   
-   # Pobierz pojedynczy wynik (np. id=1) - zobaczysz ile osób wykryto
-   Invoke-RestMethod http://localhost:5000/results/1
-   
-   # Usuń wynik
-   Invoke-RestMethod -Uri "http://localhost:5000/results/1" -Method Delete
+   Invoke-RestMethod http://localhost:5000/results   
    ```
 7. Test retry strategy:
    - Zatrzymaj Serwis A: `docker stop serwis_a`
    - Wyślij kolejny obrazek do analizy:
      ```powershell
-     Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://images.unsplash.com/photo-1517486808906-6ca8b3f04846?w=640"}'
+     Invoke-RestMethod -Uri "http://localhost:5001/analyze" -Method Post -ContentType "application/json" -Body '{"image_url": "https://independentaustralia.net/_lib/slir/w800-c660x434/i/article/img/article-19811-hero.jpg?t=1749265169"}'
      ```
    - Uruchom Serwis A: `docker start serwis_a`
    - Poczekaj ~10 sekund aż konsumer ponowi próbę wysłania wyniku

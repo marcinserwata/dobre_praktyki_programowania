@@ -21,6 +21,10 @@ services:
     container_name: serwis_a
     ports:
       - "5000:5000"
+    volumes:
+      - ./serwis_a/db:/app/db
+    environment:
+      - DATABASE_PATH=/app/db/results.db
     depends_on:
       - rabbitmq
 
